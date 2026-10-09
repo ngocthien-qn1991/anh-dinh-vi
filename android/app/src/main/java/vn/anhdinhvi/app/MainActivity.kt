@@ -28,6 +28,9 @@ import androidx.core.content.FileProvider
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
@@ -210,7 +213,59 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val net = Executors.newFixedThreadPool(3)
+
+    /** Gọi mạng phía Android, tự đi theo chuyển hướng (Apps Script trả 302 sang googleusercontent). */
+    private fun httpCall(method: String, startUrl: String, body: String): Pair<Int, String> {
+        var url = startUrl
+        var m = method
+        var payload: String? = if (method == "POST") body else null
+        repeat(6) {
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.instanceFollowRedirects = false
+            c.connectTimeout = 20000
+            c.readTimeout = 60000
+            c.requestMethod = m
+            c.setRequestProperty("User-Agent", "AnhDinhVi/1.0 (Android)")
+            c.setRequestProperty("Accept-Language", "vi")
+            if (payload != null) {
+                c.doOutput = true
+                c.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+                c.outputStream.use { it.write(payload!!.toByteArray(Charsets.UTF_8)) }
+            }
+            val code = c.responseCode
+            if (code in 300..399) {
+                val loc = c.getHeaderField("Location") ?: return code to ""
+                url = URL(URL(url), loc).toString()
+                m = "GET"; payload = null
+                c.disconnect()
+                return@repeat
+            }
+            val stream = if (code >= 400) c.errorStream else c.inputStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            c.disconnect()
+            return code to text
+        }
+        return 0 to "chuyển hướng quá nhiều lần"
+    }
+
     inner class Bridge {
+        @JavascriptInterface
+        fun http(id: String, method: String, url: String, body: String) {
+            net.execute {
+                val (code, text) = try {
+                    httpCall(method, url, body)
+                } catch (e: Exception) {
+                    0 to (e.message ?: e.javaClass.simpleName)
+                }
+                runOnUiThread {
+                    web.evaluateJavascript(
+                        "window.__nativeHttpDone(${JSONObject.quote(id)}, $code, ${JSONObject.quote(text)})", null
+                    )
+                }
+            }
+        }
+
         @JavascriptInterface
         fun saveImage(base64: String, name: String) {
             try {

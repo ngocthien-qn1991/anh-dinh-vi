@@ -175,6 +175,27 @@ let queue = store.get('queue', []);       // payload chờ gửi
 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, 2600); }
 
+/* ---------- Kết nối mạng (qua Android nếu có, tránh lỗi CORS) ---------- */
+const _httpWait = {}; let _httpSeq = 0;
+window.__nativeHttpDone = (id, status, text) => { const w=_httpWait[id]; if(w){ delete _httpWait[id]; w({status, text}); } };
+async function http(method, url, body){
+  if(window.AndroidBridge && window.AndroidBridge.http){
+    const id = 'h'+(++_httpSeq);
+    const res = await new Promise(r=>{ _httpWait[id]=r; window.AndroidBridge.http(id, method, url, body||''); });
+    if(res.status===0) throw new Error(res.text||'mất kết nối');
+    return res;
+  }
+  const r = await fetch(url, method==='POST' ? {method, headers:{'Content-Type':'text/plain;charset=utf-8'}, body} : {});
+  return {status:r.status, text: await r.text()};
+}
+function parseJson(res){
+  try{ return JSON.parse(res.text); }
+  catch(e){
+    const t = res.text.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,140);
+    throw new Error('Google trả về HTTP '+res.status+(t?': '+t:''));
+  }
+}
+
 /* ---------- GPS & địa chỉ ---------- */
 let pos = null, lastGeoAt = null, geoTimer = null, addrEdited = false;
 $('address').addEventListener('input', ()=>{ addrEdited = true; $('addrHint').textContent='Đã sửa tay'; });
@@ -214,9 +235,9 @@ async function geocode(force){
   const here = {...pos};
   $('addrHint').textContent='Đang tra địa chỉ…';
   try{
-    const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=vi&lat='+here.lat+'&lon='+here.lng);
-    if(!r.ok) throw new Error(r.status);
-    const j = await r.json();
+    const res = await http('GET','https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=vi&lat='+here.lat+'&lon='+here.lng);
+    if(res.status!==200) throw new Error(res.status);
+    const j = JSON.parse(res.text);
     $('address').value = formatAddress(j);
     lastGeoAt = here; addrEdited = false;
     $('addrHint').textContent='Tự động theo GPS';
@@ -419,8 +440,7 @@ $('shareBtn').addEventListener('click', async ()=>{
 function setSync(cls, msg){ const s=$('syncStatus'); s.className='status '+cls; s.textContent=msg; }
 
 async function postSheet(payload){
-  const r = await fetch(settings.url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(payload)});
-  const j = await r.json();
+  const j = parseJson(await http('POST', settings.url, JSON.stringify(payload)));
   if(!j.ok) throw new Error(j.error||'Lỗi không rõ');
   return j;
 }
@@ -497,8 +517,8 @@ $('testBtn').addEventListener('click', async ()=>{
   const url=$('sUrl').value.trim(); const r=$('testResult');
   if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)){ r.textContent='Đường dẫn phải dạng …/macros/s/…/exec'; return; }
   r.textContent='Đang kiểm tra…';
-  try{ const j=await (await fetch(url)).json(); r.textContent = j.ok ? 'Kết nối tốt: '+(j.sheet||'') : 'Lỗi: '+j.error; }
-  catch(e){ r.textContent='Không kết nối được. Kiểm tra quyền truy cập “Bất kỳ ai”.'; }
+  try{ const j=parseJson(await http('GET', url)); r.textContent = j.ok ? 'Kết nối tốt: '+(j.sheet||'') : 'Lỗi: '+j.error; }
+  catch(e){ r.textContent='Không kết nối được. Chi tiết: '+e.message; }
 });
 
 $('logoPick').addEventListener('click', ()=>$('logoFile').click());
