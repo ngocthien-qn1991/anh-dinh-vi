@@ -15,6 +15,7 @@ import android.provider.MediaStore
 import android.util.Base64
 import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -38,6 +39,25 @@ class MainActivity : ComponentActivity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var cameraUri: Uri? = null
     private var pendingGeo: Pair<String, GeolocationPermissions.Callback>? = null
+    private var pendingCamRequest: PermissionRequest? = null
+    private var afterCamPermission: (() -> Unit)? = null
+
+    private val askCamera =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            pendingCamRequest?.let { req ->
+                if (granted) req.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) else req.deny()
+            }
+            pendingCamRequest = null
+            val next = afterCamPermission
+            afterCamPermission = null
+            if (granted) next?.invoke() else {
+                fileCallback?.onReceiveValue(null); fileCallback = null
+                if (next != null) toastJs("Cần cho phép máy ảnh để chụp")
+            }
+        }
+
+    private fun hasCamera(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private val takePicture =
         registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -86,7 +106,7 @@ class MainActivity : ComponentActivity() {
             setGeolocationEnabled(true)
             allowFileAccess = false
             allowContentAccess = true
-            mediaPlaybackRequiresUserGesture = true
+            mediaPlaybackRequiresUserGesture = false
         }
         web.addJavascriptInterface(Bridge(), "AndroidBridge")
 
@@ -105,6 +125,16 @@ class MainActivity : ComponentActivity() {
         }
 
         web.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                runOnUiThread {
+                    if (!request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+                        request.deny(); return@runOnUiThread
+                    }
+                    if (hasCamera()) request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                    else { pendingCamRequest = request; askCamera.launch(Manifest.permission.CAMERA) }
+                }
+            }
+
             override fun onGeolocationPermissionsShowPrompt(
                 origin: String, callback: GeolocationPermissions.Callback
             ) {
@@ -131,7 +161,11 @@ class MainActivity : ComponentActivity() {
                             this@MainActivity, "$packageName.files", file
                         )
                         cameraUri = uri
-                        takePicture.launch(uri)
+                        if (hasCamera()) takePicture.launch(uri)
+                        else {
+                            afterCamPermission = { takePicture.launch(uri) }
+                            askCamera.launch(Manifest.permission.CAMERA)
+                        }
                     } else {
                         pickImage.launch("image/*")
                     }
