@@ -6,6 +6,12 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Outline
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewOutlineProvider
+import android.widget.FrameLayout
+import androidx.camera.view.PreviewView
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -36,6 +42,8 @@ import java.util.concurrent.Executors
 class MainActivity : ComponentActivity() {
 
     private lateinit var web: WebView
+    private lateinit var previewView: PreviewView
+    private lateinit var cam: NativeCamera
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var cameraUri: Uri? = null
     private var pendingGeo: Pair<String, GeolocationPermissions.Callback>? = null
@@ -52,7 +60,7 @@ class MainActivity : ComponentActivity() {
             afterCamPermission = null
             if (granted) next?.invoke() else {
                 fileCallback?.onReceiveValue(null); fileCallback = null
-                if (next != null) toastJs("Cần cho phép máy ảnh để chụp")
+                if (next != null) runJs("window.onNativeCam && window.onNativeCam({ok:false,msg:'Chưa cho phép dùng máy ảnh. Vào Cài đặt của điện thoại > Ứng dụng > Ảnh Định Vị > Quyền để bật Máy ảnh.'})")
             }
         }
 
@@ -92,12 +100,31 @@ class MainActivity : ComponentActivity() {
         File(cacheDir, "camera").deleteRecursively()
         File(cacheDir, "share").deleteRecursively()
 
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#14161A")) }
+        val density = resources.displayMetrics.density
+        previewView = PreviewView(this).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            visibility = View.INVISIBLE
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, 14f * density)
+                }
+            }
+            clipToOutline = true
+        }
+        root.addView(previewView, FrameLayout.LayoutParams(1, 1))
+        web = WebView(this)
+        web.setBackgroundColor(Color.TRANSPARENT)
+        root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        setContentView(root)
+
+        cam = NativeCamera(this, previewView) { js -> runJs(js) }
+
         val loader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/capture/", WebViewAssetLoader.InternalStoragePathHandler(this, cam.captureFolder))
             .build()
-
-        web = WebView(this)
-        setContentView(web)
 
         web.settings.apply {
             javaScriptEnabled = true
@@ -208,6 +235,18 @@ class MainActivity : ComponentActivity() {
         return list.toTypedArray()
     }
 
+    private fun runJs(js: String) {
+        runOnUiThread { web.evaluateJavascript(js, null) }
+    }
+
+    private fun startNativeCamera(back: Boolean) {
+        if (hasCamera()) cam.start(back)
+        else {
+            afterCamPermission = { cam.start(back) }
+            askCamera.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     private fun toastJs(msg: String) {
         runOnUiThread {
             web.evaluateJavascript(
@@ -284,6 +323,21 @@ class MainActivity : ComponentActivity() {
     }
 
     inner class Bridge {
+        @JavascriptInterface
+        fun camStart(back: Boolean) { runOnUiThread { startNativeCamera(back) } }
+
+        @JavascriptInterface
+        fun camZoom(z: Float) { runOnUiThread { cam.setZoom(z) } }
+
+        @JavascriptInterface
+        fun camShoot() { runOnUiThread { cam.shoot() } }
+
+        @JavascriptInterface
+        fun camFocus(fx: Float, fy: Float) { runOnUiThread { cam.focus(fx, fy) } }
+
+        @JavascriptInterface
+        fun camRect(x: Float, y: Float, w: Float, h: Float) { runOnUiThread { cam.place(x, y, w, h) } }
+
         @JavascriptInterface
         fun http(id: String, method: String, url: String, body: String) {
             net.execute {

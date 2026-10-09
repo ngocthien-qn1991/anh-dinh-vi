@@ -53,6 +53,9 @@ textarea:focus,input:focus{outline:2px solid var(--accent);outline-offset:1px;bo
 .zoombar button.on{background:rgba(255,255,255,.92);color:#000}
 .zoomlabel{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);background:rgba(0,0,0,.5);color:#fff;font:600 13px var(--f-body);padding:4px 10px;border-radius:99px;z-index:2}
 .lensbtn{position:absolute;left:10px;bottom:auto;top:12px;z-index:2;display:none}
+html.native-cam,html.native-cam body{background:transparent}
+html.native-cam .viewer{background:transparent}
+html.native-cam #video{display:none}
 .shutterbar{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
 .shutter{width:76px;height:76px;border-radius:50%;border:5px solid var(--fg);background:var(--accent);cursor:pointer;justify-self:center}
 .shutter:active{transform:scale(.94)}
@@ -369,6 +372,78 @@ async function processImage(img, now, scrollToResult){
 let stream = null, facing = 'environment', camBusy = false;
 let zoom = 1, zoomMode = 'digital', zoomMin = 1, zoomMax = 4, deviceId = null, backCams = [];
 const ZOOM_PRESETS = [0.6, 1, 2, 5];
+const NATIVE_CAM = !!(window.AndroidBridge && window.AndroidBridge.camStart);
+let zoomKey = '', lensMin = false, shotTime = null;
+if(NATIVE_CAM) document.documentElement.classList.add('native-cam');
+
+function buildZoomBar(){
+  const bar = $('zoomBar'); bar.innerHTML='';
+  const presets = ZOOM_PRESETS.slice();
+  if(zoomMin < 0.95 && !presets.some(z=>Math.abs(z-zoomMin)<0.06)){ presets[0] = Math.round(zoomMin*10)/10; }
+  presets.filter(z=>z>=zoomMin-0.06 && z<=zoomMax+0.01).forEach(z=>{
+    const b=document.createElement('button'); b.type='button'; b.dataset.z=z;
+    b.textContent = z<1 ? '.'+String(z).split('.')[1] : z+'x';
+    b.addEventListener('click', ()=>applyZoom(z<1 ? zoomMin : z, true));
+    bar.append(b);
+  });
+  markZoom();
+}
+function markZoom(){
+  [...$('zoomBar').children].forEach(b=>{ const z=+b.dataset.z; b.classList.toggle('on', z<1 ? zoom<0.95 : Math.abs(z-zoom)<0.05); });
+}
+
+/* Trạng thái máy ảnh gốc (Android) gửi về */
+window.onNativeCam = st => {
+  if(!st.ok){ camFail(st.msg); return; }
+  $('camMsg').hidden = true; $('shutter').disabled = false;
+  zoomMode = 'device'; lensMin = !!st.lens;
+  const key = st.min.toFixed(2)+'-'+st.max.toFixed(2);
+  zoomMin = st.min; zoomMax = Math.min(st.max, 10);
+  if(key !== zoomKey){ zoomKey = key; buildZoomBar(); }
+  if(!pinch) zoom = st.zoom;
+  markZoom(); reportRect();
+};
+window.onNativeShot = async (url, err) => {
+  try{
+    if(err) throw new Error(err);
+    const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=()=>rej(new Error('không đọc được ảnh')); i.src=url; });
+    const c = cropToViewer(img, img.naturalWidth, img.naturalHeight, 1, false);
+    await processImage(c, shotTime || new Date(), false);
+  }catch(e){ toast('Không chụp được: '+e.message); }
+  camBusy = false; $('shutter').disabled = false;
+};
+
+let rectQueued = false;
+function reportRect(){
+  if(!NATIVE_CAM || rectQueued) return;
+  rectQueued = true;
+  requestAnimationFrame(()=>{ rectQueued=false; const r=$('viewer').getBoundingClientRect(); window.AndroidBridge.camRect(r.left, r.top, r.width, r.height); });
+}
+if(NATIVE_CAM){
+  window.addEventListener('scroll', reportRect, {passive:true});
+  window.addEventListener('resize', reportRect);
+  setInterval(reportRect, 700);
+  if(window.ResizeObserver) new ResizeObserver(reportRect).observe(document.body);
+  // Chạm vào khung để lấy nét
+  $('overlay').addEventListener('click', e=>{
+    const r = $('viewer').getBoundingClientRect();
+    window.AndroidBridge.camFocus((e.clientX-r.left)/r.width, (e.clientY-r.top)/r.height);
+  });
+}
+
+function cropToViewer(src, W, H, dz, mirror){
+  const box = $('viewer').getBoundingClientRect();
+  const target = box.width/box.height;
+  let sw = W, sh = H;
+  if(sw/sh > target) sw = Math.round(sh*target); else sh = Math.round(sw/target);
+  if(dz>1){ sw = Math.round(sw/dz); sh = Math.round(sh/dz); }
+  const sx = Math.round((W-sw)/2), sy = Math.round((H-sh)/2);
+  const c = document.createElement('canvas'); c.width=sw; c.height=sh;
+  const cx = c.getContext('2d');
+  if(mirror){ cx.translate(sw,0); cx.scale(-1,1); }
+  cx.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  return c;
+}
 
 function track(){ return stream ? stream.getVideoTracks()[0] : null; }
 
@@ -379,26 +454,24 @@ function setupZoom(){
     zoomMode = 'native'; zoomMin = caps.zoom.min; zoomMax = Math.min(caps.zoom.max, 10);
     zoom = Math.min(zoomMax, Math.max(zoomMin, 1));
   } else { zoomMode = 'digital'; zoomMin = 1; zoomMax = 5; zoom = 1; }
-  const bar = $('zoomBar'); bar.innerHTML='';
-  ZOOM_PRESETS.filter(z=>z>=zoomMin-0.05 && z<=zoomMax+0.01).forEach(z=>{
-    const b=document.createElement('button'); b.type='button'; b.dataset.z=z;
-    b.textContent = z<1 ? '.'+String(z).split('.')[1] : z+'x';
-    b.addEventListener('click', ()=>applyZoom(z, true));
-    bar.append(b);
-  });
+  buildZoomBar();
   applyZoom(zoom, false);
 }
 
 let zoomTimer=null;
 async function applyZoom(z, show){
-  z = Math.min(zoomMax, Math.max(zoomMin, z)); zoom = z;
-  if(zoomMode==='native'){
+  let lo = zoomMin;
+  if(zoomMode==='device' && pinch && lensMin) lo = 1;   // kéo hai ngón: chỉ zoom liên tục từ 1x
+  z = Math.min(zoomMax, Math.max(lo, z)); zoom = z;
+  if(zoomMode==='device'){
+    window.AndroidBridge.camZoom(z);
+  } else if(zoomMode==='native'){
     try{ await track().applyConstraints({advanced:[{zoom:z}]}); }catch(e){}
     $('video').style.transform = facing==='user' ? 'scaleX(-1)' : '';
   } else {
     $('video').style.transform = (facing==='user' ? 'scaleX(-1) ' : '') + 'scale('+z+')';
   }
-  [...$('zoomBar').children].forEach(b=>b.classList.toggle('on', Math.abs(+b.dataset.z - z) < 0.05));
+  markZoom();
   if(show){ const l=$('zoomLabel'); l.textContent=z.toFixed(1)+'x'; l.hidden=false; clearTimeout(zoomTimer); zoomTimer=setTimeout(()=>l.hidden=true, 1200); }
 }
 
@@ -423,6 +496,12 @@ $('lensBtn').addEventListener('click', ()=>{
   startCamera().then(()=>toast('Ống kính '+((backCams.findIndex(d=>d.deviceId===deviceId))+1)+'/'+backCams.length));
 });
 async function startCamera(){
+  if(NATIVE_CAM){
+    $('camMsg').hidden = false; $('camMsg').textContent = 'Đang mở máy ảnh…';
+    zoomKey = ''; reportRect();
+    window.AndroidBridge.camStart(facing==='environment');
+    return;
+  }
   stopCamera();
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ camFail('Máy không hỗ trợ khung ngắm trong app. Bấm “dùng máy ảnh của điện thoại”.'); return; }
   $('camMsg').hidden = false; $('camMsg').textContent = 'Đang mở máy ảnh…';
@@ -441,30 +520,30 @@ async function startCamera(){
 function camFail(msg){ $('camMsg').hidden=false; $('camMsg').textContent=msg; $('shutter').disabled=true; }
 function stopCamera(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } }
 $('flipBtn').addEventListener('click', ()=>{ facing = facing==='environment' ? 'user' : 'environment'; deviceId=null; startCamera(); });
-document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopCamera(); else startCamera(); });
+document.addEventListener('visibilitychange', ()=>{ if(NATIVE_CAM) return; if(document.hidden) stopCamera(); else startCamera(); });
 
 $('shutter').addEventListener('click', async ()=>{
   const v = $('video');
-  if(camBusy || !stream || !v.videoWidth) return;
-  camBusy = true; $('shutter').disabled = true;
-  const f = $('flash'); f.style.transition='none'; f.style.opacity='0.8';
-  requestAnimationFrame(()=>{ f.style.transition='opacity .3s'; f.style.opacity='0'; });
+  if(camBusy) return;
+  if(NATIVE_CAM){
+    camBusy = true; $('shutter').disabled = true; flash();
+    shotTime = new Date();
+    window.AndroidBridge.camShoot();
+    setTimeout(()=>{ if(camBusy){ camBusy=false; $('shutter').disabled=false; } }, 15000);
+    return;
+  }
+  if(!stream || !v.videoWidth) return;
+  camBusy = true; $('shutter').disabled = true; flash();
   try{
     // Cắt đúng phần đang thấy trong khung ngắm (3:4)
-    const box = $('viewer').getBoundingClientRect();
-    const target = box.width/box.height;
-    let sw = v.videoWidth, sh = v.videoHeight;
-    if(sw/sh > target) sw = Math.round(sh*target); else sh = Math.round(sw/target);
-    if(zoomMode==='digital' && zoom>1){ sw = Math.round(sw/zoom); sh = Math.round(sh/zoom); }
-    const sx = Math.round((v.videoWidth-sw)/2), sy = Math.round((v.videoHeight-sh)/2);
-    const c = document.createElement('canvas'); c.width=sw; c.height=sh;
-    const cx = c.getContext('2d');
-    if(facing==='user'){ cx.translate(sw,0); cx.scale(-1,1); }
-    cx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+    const c = cropToViewer(v, v.videoWidth, v.videoHeight, zoomMode==='digital' ? zoom : 1, facing==='user');
     await processImage(c, new Date(), false);
   }catch(err){ toast('Không chụp được: '+err.message); }
   camBusy = false; $('shutter').disabled = !stream;
 });
+
+function flash(){ const f = $('flash'); f.style.transition='none'; f.style.opacity='0.8';
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ f.style.transition='opacity .3s'; f.style.opacity='0'; })); }
 
 /* Vẽ dấu trực tiếp lên khung ngắm */
 function drawOverlay(){
@@ -501,7 +580,7 @@ function wrapLines(ctx, text, maxW){
 }
 
 function stamp(img, d){
-  const MAX = 2400;
+  const MAX = 4000;
   let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
   const k = Math.min(1, MAX/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);
   const c = document.createElement('canvas'); c.width=w; c.height=h;
