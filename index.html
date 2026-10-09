@@ -43,11 +43,16 @@ textarea:focus,input:focus{outline:2px solid var(--accent);outline-offset:1px;bo
 .btn.small{padding:7px 10px;font-size:13px;border-radius:9px}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.viewer{position:relative;width:100%;aspect-ratio:3/4;max-height:72vh;border-radius:14px;overflow:hidden;background:#000;margin-inline:auto}
+.viewer{touch-action:pan-y;position:relative;width:100%;aspect-ratio:3/4;max-height:72vh;border-radius:14px;overflow:hidden;background:#000;margin-inline:auto}
 .viewer video,.viewer canvas{position:absolute;inset:0;width:100%;height:100%}
 .viewer video{object-fit:cover}
 .viewer .msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--muted);font-size:14px}
 .viewer .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
+.zoombar{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:10px;z-index:2}
+.zoombar button{width:44px;height:44px;border-radius:50%;border:0;background:rgba(0,0,0,.45);color:#fff;font:600 13px var(--f-body);cursor:pointer}
+.zoombar button.on{background:rgba(255,255,255,.92);color:#000}
+.zoomlabel{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);background:rgba(0,0,0,.5);color:#fff;font:600 13px var(--f-body);padding:4px 10px;border-radius:99px;z-index:2}
+.lensbtn{position:absolute;left:10px;bottom:auto;top:12px;z-index:2;display:none}
 .shutterbar{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
 .shutter{width:76px;height:76px;border-radius:50%;border:5px solid var(--fg);background:var(--accent);cursor:pointer;justify-self:center}
 .shutter:active{transform:scale(.94)}
@@ -92,13 +97,18 @@ dialog form{display:flex;flex-direction:column;gap:12px}
     <canvas id="overlay"></canvas>
     <div class="msg" id="camMsg">Đang mở máy ảnh…</div>
     <div class="flash" id="flash"></div>
+    <div class="zoomlabel" id="zoomLabel" hidden>1.0x</div>
+    <div class="zoombar" id="zoomBar"></div>
   </div>
   <div class="shutterbar">
     <button class="thumbbtn" id="lastThumb" type="button" aria-label="Xem ảnh vừa chụp"></button>
     <button class="shutter" id="shutter" type="button" aria-label="Chụp ảnh"></button>
-    <button class="iconbtn sidebtn" id="flipBtn" type="button" aria-label="Đổi camera trước/sau">
+    <div class="sidebtn" style="display:flex;gap:8px">
+    <button class="iconbtn" id="lensBtn" type="button" aria-label="Đổi ống kính" hidden style="width:auto;padding:0 10px;font:600 12px var(--f-body)">Ống kính</button>
+    <button class="iconbtn" id="flipBtn" type="button" aria-label="Đổi camera trước/sau">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2"/><path d="M14 9.5V11h-1.5M10 16.5V15h1.5"/></svg>
     </button>
+    </div>
   </div>
 
   <section class="card">
@@ -357,22 +367,80 @@ async function processImage(img, now, scrollToResult){
 
 /* ---------- Máy ảnh trong app (khung ngắm có sẵn dấu) ---------- */
 let stream = null, facing = 'environment', camBusy = false;
+let zoom = 1, zoomMode = 'digital', zoomMin = 1, zoomMax = 4, deviceId = null, backCams = [];
+const ZOOM_PRESETS = [0.6, 1, 2, 5];
+
+function track(){ return stream ? stream.getVideoTracks()[0] : null; }
+
+function setupZoom(){
+  const t = track(); let caps = {};
+  try{ caps = (t && t.getCapabilities) ? t.getCapabilities() : {}; }catch(e){}
+  if(caps.zoom && caps.zoom.max > caps.zoom.min){
+    zoomMode = 'native'; zoomMin = caps.zoom.min; zoomMax = Math.min(caps.zoom.max, 10);
+    zoom = Math.min(zoomMax, Math.max(zoomMin, 1));
+  } else { zoomMode = 'digital'; zoomMin = 1; zoomMax = 5; zoom = 1; }
+  const bar = $('zoomBar'); bar.innerHTML='';
+  ZOOM_PRESETS.filter(z=>z>=zoomMin-0.05 && z<=zoomMax+0.01).forEach(z=>{
+    const b=document.createElement('button'); b.type='button'; b.dataset.z=z;
+    b.textContent = z<1 ? '.'+String(z).split('.')[1] : z+'x';
+    b.addEventListener('click', ()=>applyZoom(z, true));
+    bar.append(b);
+  });
+  applyZoom(zoom, false);
+}
+
+let zoomTimer=null;
+async function applyZoom(z, show){
+  z = Math.min(zoomMax, Math.max(zoomMin, z)); zoom = z;
+  if(zoomMode==='native'){
+    try{ await track().applyConstraints({advanced:[{zoom:z}]}); }catch(e){}
+    $('video').style.transform = facing==='user' ? 'scaleX(-1)' : '';
+  } else {
+    $('video').style.transform = (facing==='user' ? 'scaleX(-1) ' : '') + 'scale('+z+')';
+  }
+  [...$('zoomBar').children].forEach(b=>b.classList.toggle('on', Math.abs(+b.dataset.z - z) < 0.05));
+  if(show){ const l=$('zoomLabel'); l.textContent=z.toFixed(1)+'x'; l.hidden=false; clearTimeout(zoomTimer); zoomTimer=setTimeout(()=>l.hidden=true, 1200); }
+}
+
+// Kéo hai ngón để zoom
+let pinch=null;
+$('viewer').addEventListener('touchstart', e=>{ if(e.touches.length===2){ pinch={d:dist(e.touches), z:zoom}; } }, {passive:true});
+$('viewer').addEventListener('touchmove', e=>{ if(pinch && e.touches.length===2){ e.preventDefault(); applyZoom(pinch.z * dist(e.touches)/pinch.d, true); } }, {passive:false});
+$('viewer').addEventListener('touchend', e=>{ if(e.touches.length<2) pinch=null; });
+function dist(t){ return Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY); }
+
+async function listBackCams(){
+  try{
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    backCams = devs.filter(d=>!/front|user|trước/i.test(d.label));
+    $('lensBtn').hidden = !(facing==='environment' && backCams.length > 1);
+  }catch(e){}
+}
+$('lensBtn').addEventListener('click', ()=>{
+  if(!backCams.length) return;
+  const i = backCams.findIndex(d=>d.deviceId===deviceId);
+  deviceId = backCams[(i+1) % backCams.length].deviceId;
+  startCamera().then(()=>toast('Ống kính '+((backCams.findIndex(d=>d.deviceId===deviceId))+1)+'/'+backCams.length));
+});
 async function startCamera(){
   stopCamera();
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ camFail('Máy không hỗ trợ khung ngắm trong app. Bấm “dùng máy ảnh của điện thoại”.'); return; }
   $('camMsg').hidden = false; $('camMsg').textContent = 'Đang mở máy ảnh…';
   try{
-    stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:facing}, width:{ideal:4096}, height:{ideal:3072}}});
+    const v0 = {width:{ideal:4096}, height:{ideal:3072}, zoom:true};
+    if(deviceId && facing==='environment') v0.deviceId = {exact:deviceId}; else v0.facingMode = {ideal:facing};
+    try{ stream = await navigator.mediaDevices.getUserMedia({audio:false, video:v0}); }
+    catch(err){ if(v0.deviceId){ deviceId=null; delete v0.deviceId; v0.facingMode={ideal:facing}; } delete v0.zoom; stream = await navigator.mediaDevices.getUserMedia({audio:false, video:v0}); }
     const v = $('video'); v.srcObject = stream; await v.play().catch(()=>{});
-    v.style.transform = facing==='user' ? 'scaleX(-1)' : '';
     $('camMsg').hidden = true; $('shutter').disabled = false;
+    setupZoom(); listBackCams();
   }catch(e){
     camFail(e && e.name==='NotAllowedError' ? 'Chưa cho phép dùng máy ảnh. Mở lại app và chọn Cho phép.' : 'Không mở được máy ảnh ('+(e.message||e.name)+').');
   }
 }
 function camFail(msg){ $('camMsg').hidden=false; $('camMsg').textContent=msg; $('shutter').disabled=true; }
 function stopCamera(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } }
-$('flipBtn').addEventListener('click', ()=>{ facing = facing==='environment' ? 'user' : 'environment'; startCamera(); });
+$('flipBtn').addEventListener('click', ()=>{ facing = facing==='environment' ? 'user' : 'environment'; deviceId=null; startCamera(); });
 document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopCamera(); else startCamera(); });
 
 $('shutter').addEventListener('click', async ()=>{
@@ -387,6 +455,7 @@ $('shutter').addEventListener('click', async ()=>{
     const target = box.width/box.height;
     let sw = v.videoWidth, sh = v.videoHeight;
     if(sw/sh > target) sw = Math.round(sh*target); else sh = Math.round(sw/target);
+    if(zoomMode==='digital' && zoom>1){ sw = Math.round(sw/zoom); sh = Math.round(sh/zoom); }
     const sx = Math.round((v.videoWidth-sw)/2), sy = Math.round((v.videoHeight-sh)/2);
     const c = document.createElement('canvas'); c.width=sw; c.height=sh;
     const cx = c.getContext('2d');
