@@ -1,0 +1,242 @@
+package vn.anhdinhvi.app
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.ContentValues
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Base64
+import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import androidx.webkit.WebViewAssetLoader
+import org.json.JSONObject
+import java.io.File
+
+class MainActivity : ComponentActivity() {
+
+    private lateinit var web: WebView
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var cameraUri: Uri? = null
+    private var pendingGeo: Pair<String, GeolocationPermissions.Callback>? = null
+
+    private val takePicture =
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            val cb = fileCallback
+            fileCallback = null
+            val uri = cameraUri
+            cb?.onReceiveValue(if (ok && uri != null) arrayOf(uri) else null)
+        }
+
+    private val pickImage =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            val cb = fileCallback
+            fileCallback = null
+            cb?.onReceiveValue(uri?.let { arrayOf(it) })
+        }
+
+    private val askPermissions =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+                hasLocation()
+            pendingGeo?.let { (origin, cb) -> cb.invoke(origin, granted, false) }
+            pendingGeo = null
+        }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.statusBarColor = Color.parseColor("#14161A")
+        window.navigationBarColor = Color.parseColor("#14161A")
+
+        File(cacheDir, "camera").deleteRecursively()
+        File(cacheDir, "share").deleteRecursively()
+
+        val loader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
+        web = WebView(this)
+        setContentView(web)
+
+        web.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            @Suppress("DEPRECATION")
+            setGeolocationEnabled(true)
+            allowFileAccess = false
+            allowContentAccess = true
+            mediaPlaybackRequiresUserGesture = true
+        }
+        web.addJavascriptInterface(Bridge(), "AndroidBridge")
+
+        web.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView, request: WebResourceRequest
+            ): WebResourceResponse? = loader.shouldInterceptRequest(request.url)
+
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val url = request.url
+                if (url.host == "appassets.androidplatform.net") return false
+                return try {
+                    startActivity(Intent(Intent.ACTION_VIEW, url)); true
+                } catch (e: Exception) { true }
+            }
+        }
+
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String, callback: GeolocationPermissions.Callback
+            ) {
+                if (hasLocation()) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    pendingGeo = origin to callback
+                    askPermissions.launch(neededPermissions())
+                }
+            }
+
+            override fun onShowFileChooser(
+                view: WebView,
+                callback: ValueCallback<Array<Uri>>,
+                params: FileChooserParams
+            ): Boolean {
+                fileCallback?.onReceiveValue(null)
+                fileCallback = callback
+                return try {
+                    if (params.isCaptureEnabled) {
+                        val dir = File(cacheDir, "camera").apply { mkdirs() }
+                        val file = File(dir, "cap_${System.currentTimeMillis()}.jpg")
+                        val uri = FileProvider.getUriForFile(
+                            this@MainActivity, "$packageName.files", file
+                        )
+                        cameraUri = uri
+                        takePicture.launch(uri)
+                    } else {
+                        pickImage.launch("image/*")
+                    }
+                    true
+                } catch (e: Exception) {
+                    fileCallback = null
+                    callback.onReceiveValue(null)
+                    toastJs("Không mở được máy ảnh: ${e.message}")
+                    true
+                }
+            }
+        }
+
+        if (savedInstanceState != null) web.restoreState(savedInstanceState)
+        else web.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        web.saveState(outState)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (web.canGoBack()) web.goBack() else @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    private fun hasLocation(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun neededPermissions(): Array<String> {
+        val list = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            list.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        return list.toTypedArray()
+    }
+
+    private fun toastJs(msg: String) {
+        runOnUiThread {
+            web.evaluateJavascript(
+                "window.onNativeToast && window.onNativeToast(${JSONObject.quote(msg)})", null
+            )
+        }
+    }
+
+    private fun saveToGallery(bytes: ByteArray, name: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/AnhDinhVi")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val resolver = contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("không tạo được tệp ảnh")
+            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                runOnUiThread { askPermissions.launch(neededPermissions()) }
+                throw IllegalStateException("cần cấp quyền bộ nhớ, bấm Lưu ảnh lần nữa")
+            }
+            @Suppress("DEPRECATION")
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "AnhDinhVi")
+            dir.mkdirs()
+            val file = File(dir, name)
+            file.writeBytes(bytes)
+            MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null)
+        }
+    }
+
+    inner class Bridge {
+        @JavascriptInterface
+        fun saveImage(base64: String, name: String) {
+            try {
+                saveToGallery(Base64.decode(base64, Base64.DEFAULT), name)
+                toastJs("Đã lưu vào Thư viện ảnh (album AnhDinhVi)")
+            } catch (e: Exception) {
+                toastJs("Chưa lưu được ảnh: ${e.message}")
+            }
+        }
+
+        @JavascriptInterface
+        fun shareImage(base64: String, name: String) {
+            try {
+                val dir = File(cacheDir, "share").apply { mkdirs() }
+                val file = File(dir, name)
+                file.writeBytes(Base64.decode(base64, Base64.DEFAULT))
+                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.files", file)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                runOnUiThread { startActivity(Intent.createChooser(send, "Chia sẻ ảnh")) }
+            } catch (e: Exception) {
+                toastJs("Chưa chia sẻ được: ${e.message}")
+            }
+        }
+    }
+}
