@@ -6,6 +6,11 @@
 <meta name="theme-color" content="#14161a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Ảnh Định Vị">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
 <title>Ảnh Định Vị</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -37,7 +42,7 @@ header{display:flex;align-items:center;gap:10px;padding-top:14px}
 .pill i{width:8px;height:8px;border-radius:50%;background:currentColor}
 .pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
 .mono{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums}
-textarea,input[type=text],input[type=url]{width:100%;background:#15171c;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;resize:vertical}
+textarea,input[type=text],input[type=url]{width:100%;background:#15171c;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:16px;resize:vertical}
 textarea:focus,input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
 .btn{font:inherit;font-weight:600;border-radius:12px;border:1px solid var(--line);background:#262a31;color:var(--fg);padding:11px 14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}
 .btn:focus-visible,.iconbtn:focus-visible,.shoot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -406,7 +411,11 @@ async function processImage(img, now, scrollToResult){
   $('photoName').textContent = fileName;
   $('lastThumb').style.backgroundImage = 'url('+current.url+')';
 
-  if(settings.autoSave) saveBlob(blob, fileName);
+  if(settings.autoSave){
+    if(window.AndroidBridge) saveBlob(blob, fileName);
+    else if(IS_TOUCH){ $('saveBtn').textContent='Lưu vào Ảnh'; $('photoDlg').showModal(); }
+    else saveBlob(blob, fileName);
+  }
 
   const thumb = makeThumb(canvas);
   const payload = {
@@ -714,13 +723,20 @@ function blobToBase64(blob){
 }
 
 const Bridge = window.AndroidBridge || null;
+const IS_TOUCH = matchMedia('(pointer:coarse)').matches;
 async function saveBlob(blob, name){
   if(Bridge){ Bridge.saveImage(await blobToBase64(blob), name); return; }
+  const f = new File([blob], name, {type:'image/jpeg'});
+  if(IS_TOUCH && navigator.canShare && navigator.canShare({files:[f]})){
+    try{ await navigator.share({files:[f]}); }catch(e){}
+    return;
+  }
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+  toast('Đã lưu vào thư mục Tải xuống');
 }
-$('saveBtn').addEventListener('click', ()=>{ if(current){ saveBlob(current.blob, current.fileName); if(!Bridge) toast('Đã lưu vào thư mục Tải xuống'); } });
+$('saveBtn').addEventListener('click', ()=>{ if(current) saveBlob(current.blob, current.fileName); });
 window.onNativeToast = msg => toast(msg);
 $('shareBtn').addEventListener('click', async ()=>{
   if(!current) return;
@@ -839,6 +855,10 @@ function fitViewer(){
 }
 window.addEventListener('resize', fitViewer);
 if(window.visualViewport) visualViewport.addEventListener('resize', fitViewer);
+
+if(!window.AndroidBridge && 'serviceWorker' in navigator && location.protocol==='https:'){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
 
 /* ---------- Khởi động ---------- */
 loadLogo();

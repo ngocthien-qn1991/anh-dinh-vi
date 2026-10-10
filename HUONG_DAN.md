@@ -33,3 +33,9 @@ Cách khác: mở thư mục `android` bằng Android Studio → Build → Build
 
 ## Sửa giao diện hoặc nội dung dấu ảnh
 Chỉ cần sửa `index.html` rồi tải lên GitHub lại, APK mới sẽ tự được build.
+
+## 4. Dùng trên iPhone (bản web)
+Mở bằng **Safari**: https://ngocthien-qn1991.github.io/anh-dinh-vi/
+→ bấm nút Chia sẻ → **Thêm vào MH chính**. Cho phép Máy ảnh và Vị trí khi được hỏi.
+Vào ⚙️ dán cùng link Apps Script như bản Android.
+Lưu ảnh về máy: sau khi chụp bấm **Lưu vào Ảnh** → **Lưu hình ảnh**.
