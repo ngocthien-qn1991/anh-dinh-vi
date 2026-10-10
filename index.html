@@ -792,7 +792,7 @@ $('logoFile').addEventListener('change', async e=>{
 
 /* ---------- Khởi động ---------- */
 loadLogo();
-renderHistory(); updateRetry(); startGPS(); flushQueue(); startCamera(); drawOverlay();
+renderHistory(); if(history[0] && history[0].thumb) $('lastThumb').style.backgroundImage='url('+history[0].thumb+')'; updateRetry(); startGPS(); flushQueue(); startCamera(); drawOverlay();
 if(!settings.url) setTimeout(()=>toast('Mở Cài đặt để dán đường dẫn Google Sheet'), 800);
 })();
 </script>
