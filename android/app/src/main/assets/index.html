@@ -74,7 +74,17 @@ html.native-cam #video{display:none}
 .sidebtn{justify-self:end}
 .shoot{position:relative;display:flex;align-items:center;justify-content:center;gap:12px;background:var(--accent);color:var(--accent-ink);font-weight:800;font-size:18px;border:0;border-radius:16px;padding:18px;cursor:pointer}
 .shoot svg{width:26px;height:26px}
-#preview{width:100%;border-radius:12px;display:block;background:#000}
+#preview{width:100%;max-height:60vh;object-fit:contain;border-radius:12px;display:block;background:#000}
+.sidegrp{display:flex;gap:10px;align-items:center;justify-self:start}
+.sidegrp.end{justify-self:end}
+.iconbtn{position:relative}
+.dot{position:absolute;top:7px;right:7px;width:9px;height:9px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 2px var(--panel)}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)}
+.badge{position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bad);color:#fff;font:700 11px/18px var(--f-body)}
+.syncline{margin:0;text-align:center;font-size:13px;color:var(--muted)}
+.syncline.ok{color:var(--ok)} .syncline.bad{color:var(--bad)} .syncline.warn{color:var(--warn)}
+dialog.sheet{max-height:85vh;overflow:auto}
+dialog.sheet .hist{max-height:55vh;overflow:auto}
 .status{font-size:13px;color:var(--muted)}
 .status.ok{color:var(--ok)} .status.bad{color:var(--bad)} .status.warn{color:var(--warn)}
 .hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
@@ -88,6 +98,7 @@ html.native-cam #video{display:none}
 dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:16px;width:min(520px,calc(100% - 24px));padding:18px}
 dialog::backdrop{background:rgba(0,0,0,.6)}
 dialog form{display:flex;flex-direction:column;gap:12px}
+.thumbbtn{justify-self:auto}
 .check{display:flex;gap:10px;align-items:flex-start;font-size:14px}
 .check input{margin-top:3px;width:18px;height:18px;accent-color:var(--accent)}
 .hint{font-size:12px;color:var(--muted)}
@@ -113,9 +124,19 @@ dialog form{display:flex;flex-direction:column;gap:12px}
     <div class="zoombar" id="zoomBar"></div>
   </div>
   <div class="shutterbar">
-    <button class="thumbbtn" id="lastThumb" type="button" aria-label="Xem ảnh vừa chụp"></button>
+    <div class="sidegrp">
+      <button class="thumbbtn" id="lastThumb" type="button" aria-label="Xem ảnh vừa chụp"></button>
+      <button class="iconbtn" id="histBtn" type="button" aria-label="Lịch sử">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
+        <span class="badge" id="queueBadge" hidden></span>
+      </button>
+    </div>
     <button class="shutter" id="shutter" type="button" aria-label="Chụp ảnh"></button>
-    <div class="sidebtn" style="display:flex;gap:8px">
+    <div class="sidegrp end">
+    <button class="iconbtn" id="locBtn" type="button" aria-label="Vị trí">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>
+      <span class="dot warn" id="gpsDot"></span>
+    </button>
     <button class="iconbtn" id="lensBtn" type="button" aria-label="Đổi ống kính" hidden style="width:auto;padding:0 10px;font:600 12px var(--f-body)">Ống kính</button>
     <button class="iconbtn" id="flipBtn" type="button" aria-label="Đổi camera trước/sau">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2"/><path d="M14 9.5V11h-1.5M10 16.5V15h1.5"/></svg>
@@ -123,22 +144,11 @@ dialog form{display:flex;flex-direction:column;gap:12px}
     </div>
   </div>
 
+  <p class="syncline" id="syncStatus" hidden></p>
+
   <section class="card">
     <label class="label" for="note">Ghi chú (hiện trên ảnh và dùng làm tên ảnh)</label>
     <textarea id="note" rows="2" placeholder="Ví dụ: Kiểm tra lắp đặt máy tính quầy 1"></textarea>
-  </section>
-
-  <section class="card" aria-labelledby="locLabel">
-    <div class="row" style="justify-content:space-between">
-      <span class="label" id="locLabel">Vị trí hiện tại</span>
-      <span class="pill warn" id="gpsPill"><i></i><span>Đang tìm GPS…</span></span>
-    </div>
-    <div class="mono" id="coords">—, —</div>
-    <textarea id="address" rows="2" placeholder="Địa chỉ sẽ tự điền khi có GPS. Bạn có thể sửa tay."></textarea>
-    <div class="row">
-      <button class="btn small" id="refreshLoc" type="button">Cập nhật vị trí</button>
-      <span class="hint" id="addrHint"></span>
-    </div>
   </section>
 
   <input type="file" id="camera" accept="image/*" capture="environment" hidden>
@@ -154,26 +164,47 @@ dialog form{display:flex;flex-direction:column;gap:12px}
     </button>
   </div>
 
-  <section class="card" id="resultCard" hidden>
-    <span class="label">Ảnh vừa chụp</span>
-    <img id="preview" alt="Ảnh đã đóng dấu">
-    <div class="status" id="syncStatus"></div>
-    <div class="btns">
-      <button class="btn" id="saveBtn" type="button">Lưu ảnh</button>
-      <button class="btn" id="shareBtn" type="button">Chia sẻ</button>
-      <button class="btn primary" id="againBtn" type="button">Chụp tiếp</button>
-    </div>
-  </section>
+</div>
 
-  <section class="card">
+<dialog id="locDlg" class="sheet">
+  <form method="dialog">
+    <div class="row" style="justify-content:space-between">
+      <span class="label" id="locLabel">Vị trí hiện tại</span>
+      <span class="pill warn" id="gpsPill"><i></i><span>Đang tìm GPS…</span></span>
+    </div>
+    <div class="mono" id="coords">—, —</div>
+    <textarea id="address" rows="2" placeholder="Địa chỉ sẽ tự điền khi có GPS. Bạn có thể sửa tay."></textarea>
+    <div class="row">
+      <button class="btn small" id="refreshLoc" type="button">Cập nhật vị trí</button>
+      <span class="hint" id="addrHint"></span>
+    </div>
+    <div class="row" style="justify-content:flex-end"><button class="btn primary" value="close" autofocus>Xong</button></div>
+  </form>
+</dialog>
+
+<dialog id="histDlg" class="sheet">
+  <form method="dialog">
     <div class="row" style="justify-content:space-between">
       <span class="label">Lịch sử gần đây</span>
       <button class="btn small" id="retryBtn" type="button" hidden>Gửi lại <span id="queueCount"></span></button>
     </div>
     <ul class="hist" id="hist"></ul>
-    <p class="empty" id="histEmpty">Chưa có ảnh nào. Bấm “Chụp ảnh” để bắt đầu.</p>
-  </section>
-</div>
+    <p class="empty" id="histEmpty">Chưa có ảnh nào. Bấm nút tròn vàng để chụp.</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="close" autofocus>Đóng</button></div>
+  </form>
+</dialog>
+
+<dialog id="photoDlg" class="sheet">
+  <form method="dialog">
+    <span class="label" id="photoName">Ảnh vừa chụp</span>
+    <img id="preview" alt="Ảnh đã đóng dấu">
+    <div class="btns">
+      <button class="btn" id="saveBtn" type="button">Lưu ảnh</button>
+      <button class="btn" id="shareBtn" type="button">Chia sẻ</button>
+      <button class="btn primary" value="close" autofocus>Đóng</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="settings">
   <form method="dialog" id="settingsForm">
@@ -254,7 +285,7 @@ function parseJson(res){
 let pos = null, lastGeoAt = null, geoTimer = null, addrEdited = false;
 $('address').addEventListener('input', ()=>{ addrEdited = true; $('addrHint').textContent='Đã sửa tay'; });
 
-function setPill(cls, text){ const p=$('gpsPill'); p.className='pill '+cls; p.lastElementChild.textContent=text; }
+function setPill(cls, text){ const p=$('gpsPill'); p.className='pill '+cls; p.lastElementChild.textContent=text; $('gpsDot').className='dot '+cls; $('locBtn').title=text; }
 
 function distM(a,b){
   const R=6371000, toR=x=>x*Math.PI/180;
@@ -319,8 +350,10 @@ $('refreshLoc').addEventListener('click', ()=>{
 /* ---------- Chụp & đóng dấu ---------- */
 $('pickBtn').addEventListener('click', ()=>$('gallery').click());
 $('nativeCamBtn').addEventListener('click', ()=>$('camera').click());
-$('againBtn').addEventListener('click', ()=>window.scrollTo({top:0, behavior:'smooth'}));
-$('lastThumb').addEventListener('click', ()=>{ if(current) $('resultCard').scrollIntoView({behavior:'smooth', block:'start'}); });
+$('lastThumb').addEventListener('click', ()=>{ if(current){ $('photoDlg').showModal(); } else if(history.length){ $('histDlg').showModal(); } else toast('Chưa có ảnh nào'); });
+$('histBtn').addEventListener('click', ()=>$('histDlg').showModal());
+$('locBtn').addEventListener('click', ()=>$('locDlg').showModal());
+$('locDlg').addEventListener('close', ()=>drawOverlay());
 $('camera').addEventListener('change', onFile);
 $('gallery').addEventListener('change', onFile);
 
@@ -366,9 +399,8 @@ async function processImage(img, now, scrollToResult){
   if(current && current.url) URL.revokeObjectURL(current.url);
   current = {blob, fileName, url:URL.createObjectURL(blob)};
   $('preview').src = current.url;
+  $('photoName').textContent = fileName;
   $('lastThumb').style.backgroundImage = 'url('+current.url+')';
-  $('resultCard').hidden = false;
-  if(scrollToResult) $('resultCard').scrollIntoView({behavior:'smooth', block:'start'});
 
   if(settings.autoSave) saveBlob(blob, fileName);
 
@@ -696,7 +728,8 @@ $('shareBtn').addEventListener('click', async ()=>{
 });
 
 /* ---------- Gửi Google Sheet ---------- */
-function setSync(cls, msg){ const s=$('syncStatus'); s.className='status '+cls; s.textContent=msg; }
+let syncTimer=null;
+function setSync(cls, msg){ const s=$('syncStatus'); s.className='syncline '+cls; s.textContent=msg; s.hidden=false; clearTimeout(syncTimer); if(cls==='ok') syncTimer=setTimeout(()=>s.hidden=true, 6000); }
 
 async function postSheet(payload){
   const j = parseJson(await http('POST', settings.url, JSON.stringify(payload)));
@@ -740,7 +773,7 @@ async function flushQueue(){
   flushing=false; updateRetry();
   if(sent) toast('Đã gửi bù '+sent+' bản ghi');
 }
-function updateRetry(){ $('retryBtn').hidden = !queue.length; $('queueCount').textContent='('+queue.length+')'; }
+function updateRetry(){ $('retryBtn').hidden = !queue.length; $('queueCount').textContent='('+queue.length+')'; $('queueBadge').hidden = !queue.length; $('queueBadge').textContent = queue.length; }
 $('retryBtn').addEventListener('click', flushQueue);
 window.addEventListener('online', flushQueue);
 
